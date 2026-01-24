@@ -1040,6 +1040,8 @@
           "tools/llm-task",
           "plugin",
           "plugins/voice-call",
+          "plugins/msteams-call",
+          "plugins/msteams-call/csharp-gateway",
           "plugins/zalouser",
           "tools/exec",
           "tools/web",

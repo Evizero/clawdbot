@@ -1,0 +1,22 @@
+{
+  "name": "@clawdbot/msteams-call",
+  "version": "2026.1.24",
+  "type": "module",
+  "description": "Clawdbot MS Teams voice call plugin",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.47",
+    "ws": "^8.19.0",
+    "zod": "^4.3.5"
+  },
+  "devDependencies": {
+    "clawdbot": "workspace:*"
+  },
+  "peerDependencies": {
+    "clawdbot": "*"
+  },
+  "clawdbot": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

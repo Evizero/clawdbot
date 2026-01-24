@@ -12,6 +12,12 @@ Updated: 2026-01-21
 
 Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards.
 
+## Voice Calling
+
+For voice calls via Microsoft Teams, see the [MS Teams Voice Call plugin](/plugins/msteams-call).
+
+Note: Voice calling requires a separate C# media gateway on Azure Windows Server. The chat channel (this page) and voice channel are configured independently.
+
 ## Plugin required
 Microsoft Teams ships as a plugin and is not bundled with the core install.
 
