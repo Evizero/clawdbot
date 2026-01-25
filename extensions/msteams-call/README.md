@@ -60,11 +60,14 @@ If your OpenAI key is not already configured, add it:
 1. User calls your bot in Teams (or bot calls user)
 2. TeamsMediaGateway (C# on Azure) receives the call via Microsoft Graph SDK
 3. Gateway connects to Clawdbot via WebSocket, streaming audio as base64 JSON
-4. Clawdbot resamples audio (16kHz ↔ 24kHz) and pipes it to OpenAI Realtime STT
-5. When the user stops speaking, STT emits a transcript
-6. Your application generates a response and calls `bridge.speak()`
-7. Clawdbot synthesizes TTS via OpenAI, resamples back to 16kHz, and streams to gateway
-8. Gateway plays audio back to the Teams user
+4. **Gateway sends `auth_request` to Clawdbot BEFORE answering the call**
+5. **Clawdbot performs config-driven authorization check and responds with `auth_response`**
+6. If authorized, gateway answers the call; if not, call is rejected
+7. Clawdbot resamples audio (16kHz to 24kHz) and pipes it to OpenAI Realtime STT
+8. When the user stops speaking, STT emits a transcript
+9. Your application generates a response and calls `bridge.speak()`
+10. Clawdbot synthesizes TTS via OpenAI, resamples back to 16kHz, and streams to gateway
+11. Gateway plays audio back to the Teams user
 
 ## Architecture
 
@@ -169,15 +172,29 @@ sequenceDiagram
 
     User->>Teams: Initiates call to bot
     Teams->>Gateway: Call notification (Graph API)
-    Gateway->>Gateway: Answer call, create BotMediaStream
 
-    Note over Gateway: BotMediaStream constructor<br/>subscribes to AudioMediaReceived
+    Note over Gateway: Call received but NOT yet answered
 
     Gateway->>Bridge: WebSocket connect (X-Bridge-Secret header)
     Bridge->>Bridge: verifyClient() - timing-safe secret comparison
     Bridge-->>Gateway: Connection accepted
 
-    Gateway->>Bridge: session_start {callId, direction:"inbound", metadata}
+    Gateway->>Bridge: auth_request {callId, correlationId, metadata}
+
+    Note over Bridge: Authorization check based on<br/>config mode (disabled/open/allowlist/tenant-only)
+
+    alt Authorization Approved
+        Bridge-->>Gateway: auth_response {authorized: true, strategy}
+        Gateway->>Gateway: Answer call, create BotMediaStream
+
+        Note over Gateway: BotMediaStream constructor<br/>subscribes to AudioMediaReceived
+
+        Gateway->>Bridge: session_start {callId, direction:"inbound", metadata}
+    else Authorization Denied
+        Bridge-->>Gateway: auth_response {authorized: false, reason, strategy}
+        Gateway->>Gateway: Reject call
+        Note over Gateway: Call terminated
+    end
 
     Note over Bridge: handleSessionStart()<br/>creates BridgeSession
 
@@ -391,6 +408,7 @@ sequenceDiagram
 
 | Type | Description | Fields |
 |------|-------------|--------|
+| `auth_request` | Authorization request (before answering) | `callId`, `correlationId`, `metadata` (tenantId, userId, displayName, userPrincipalName, phoneNumber) |
 | `session_start` | New call connected | `callId`, `direction` ("inbound"/"outbound"), `metadata` |
 | `call_status` | Outbound call progress | `callId`, `status` ("ringing"/"answered"/"failed"/"busy"/"no-answer"), `error?` |
 | `audio_in` | Audio frame from user | `callId`, `seq` (sequence number), `data` (base64 PCM 16kHz, 640 bytes) |
@@ -402,6 +420,7 @@ sequenceDiagram
 
 | Type | Description | Fields |
 |------|-------------|--------|
+| `auth_response` | Authorization decision | `callId`, `correlationId`, `authorized` (boolean), `reason?`, `strategy`, `timestamp` |
 | `initiate_call` | Start outbound call | `callId`, `target` ({type, userId/number}), `message?` |
 | `audio_out` | Audio frame to user | `callId`, `seq`, `data` (base64 PCM 16kHz, 640 bytes) |
 | `hangup` | End call | `callId` |
@@ -410,6 +429,41 @@ sequenceDiagram
 ### Message Examples
 
 ```json
+// auth_request (Gateway → Clawdbot)
+{
+  "type": "auth_request",
+  "callId": "call-abc123",
+  "correlationId": "corr-xyz789",
+  "metadata": {
+    "tenantId": "tenant-uuid",
+    "userId": "user-uuid",
+    "displayName": "John Doe",
+    "userPrincipalName": "john@contoso.com",
+    "phoneNumber": null
+  }
+}
+
+// auth_response (Clawdbot → Gateway) - Approved
+{
+  "type": "auth_response",
+  "callId": "call-abc123",
+  "correlationId": "corr-xyz789",
+  "authorized": true,
+  "strategy": "allowlist",
+  "timestamp": 1737820800000
+}
+
+// auth_response (Clawdbot → Gateway) - Denied
+{
+  "type": "auth_response",
+  "callId": "call-abc123",
+  "correlationId": "corr-xyz789",
+  "authorized": false,
+  "reason": "User not in allowlist",
+  "strategy": "allowlist",
+  "timestamp": 1737820800000
+}
+
 // session_start (Gateway → Clawdbot)
 {
   "type": "session_start",
@@ -467,10 +521,18 @@ sequenceDiagram
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `authorization.mode` | `"allowlist"` | `"open"`, `"allowlist"`, or `"tenant-only"` |
-| `authorization.allowFrom` | `[]` | User IDs/UPNs for allowlist mode |
-| `authorization.allowedTenants` | `[]` | Tenant IDs for tenant-only mode |
+| `authorization.mode` | `"disabled"` | `"disabled"`, `"open"`, `"allowlist"`, or `"tenant-only"` |
+| `authorization.allowFrom` | `[]` | User IDs/UPNs for allowlist mode (empty = reject all) |
+| `authorization.allowedTenants` | `[]` | Tenant IDs for tenant-only mode (empty = reject all) |
 | `authorization.allowPstn` | `false` | Allow phone number calls |
+
+**Authorization modes:**
+- `disabled` - Rejects ALL inbound calls (fail-closed default)
+- `open` - Allows all inbound calls
+- `allowlist` - Only allows calls from users in `allowFrom` list
+- `tenant-only` - Only allows calls from tenants in `allowedTenants` list
+
+**Important:** Empty `allowFrom` or `allowedTenants` lists will reject all calls (fail-closed security). You must explicitly add entries to allow calls.
 
 ### Call settings
 
@@ -524,9 +586,11 @@ sequenceDiagram
             bind: "0.0.0.0"  // Expose to network
           },
           authorization: {
+            // IMPORTANT: Default is "disabled" - must explicitly set mode to accept calls
             mode: "allowlist",
-            allowFrom: ["user@contoso.com"],
-            allowedTenants: ["tenant-uuid"]
+            allowFrom: ["user@example.com"],
+            allowedTenants: ["tenant-guid"],
+            allowPstn: false
           },
           tts: {
             voice: "nova",
@@ -678,6 +742,14 @@ The bridge handles resampling automatically:
 4. **Call ID Validation**: Call IDs must match `^[a-zA-Z0-9_-]{1,128}$` to prevent injection attacks.
 
 5. **Timing-Safe Comparison**: Secret validation uses `crypto.timingSafeEqual` to prevent timing attacks.
+
+6. **Authorization (Fail-Closed)**:
+   - Default mode is `disabled` - you must explicitly enable inbound calls
+   - Empty `allowFrom` or `allowedTenants` lists reject all calls
+   - All authorization decisions are logged with `[msteams-call][AUDIT]` prefix for audit trails
+   - Gateway has a 2-second timeout for auth responses (configurable via `ClawdbotAuthTimeoutMs`)
+   - Timestamp validation rejects auth responses older than 5 seconds to prevent replay attacks
+   - On timeout, error, or missing metadata, calls are rejected (fail-closed)
 
 ## License
 

@@ -61,8 +61,8 @@ export const BridgeConfigSchema = z.object({
  * Call authorization configuration.
  */
 export const AuthorizationConfigSchema = z.object({
-  /** Authorization mode: open, allowlist, or tenant-only */
-  mode: z.enum(["open", "allowlist", "tenant-only"]).default("allowlist"),
+  /** Authorization mode: disabled (reject all), open, allowlist, or tenant-only */
+  mode: z.enum(["disabled", "open", "allowlist", "tenant-only"]).default("disabled"),
   /** List of allowed user IDs or UPNs (for allowlist mode) */
   allowFrom: z.array(z.string()).default([]),
   /** List of allowed tenant IDs (for tenant-only and allowlist modes) */
@@ -112,7 +112,7 @@ export const TeamsCallConfigSchema = z.object({
 
   /** Call authorization settings */
   authorization: AuthorizationConfigSchema.optional().transform((v) => v ?? {
-    mode: "allowlist" as const,
+    mode: "disabled" as const,
     allowFrom: [],
     allowedTenants: [],
     allowPstn: false,

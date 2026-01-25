@@ -18,6 +18,8 @@ import type {
   InitiateCallMessage,
   AudioOutMessage,
   HangupMessage,
+  AuthRequestMessage,
+  AuthResponseMessage,
   CallDirection,
   CallStatus,
   EndReason,
@@ -86,6 +88,8 @@ export function parseInboundMessage(raw: string): InboundMessage {
       return parseSessionResume(msg, raw);
     case "ping":
       return parsePing(msg, raw);
+    case "auth_request":
+      return parseAuthRequest(msg, raw);
     default:
       throw new MessageParseError(`Unknown message type: ${msg.type}`, raw);
   }
@@ -193,6 +197,16 @@ function parsePing(
 ): PingMessage {
   const callId = requireString(msg, "callId", raw);
   return { type: "ping", callId };
+}
+
+function parseAuthRequest(
+  msg: Record<string, unknown>,
+  raw: string,
+): AuthRequestMessage {
+  const callId = requireString(msg, "callId", raw);
+  const correlationId = requireString(msg, "correlationId", raw);
+  const metadata = requireMetadata(msg, raw);
+  return { type: "auth_request", callId, correlationId, metadata };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -397,4 +411,25 @@ const CALL_ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
 
 export function validateCallId(callId: string): boolean {
   return CALL_ID_REGEX.test(callId);
+}
+
+/**
+ * Build an auth_response message.
+ */
+export function buildAuthResponse(
+  callId: string,
+  correlationId: string,
+  authorized: boolean,
+  reason?: string,
+  strategy?: string,
+): AuthResponseMessage {
+  return {
+    type: "auth_response",
+    callId,
+    correlationId,
+    authorized,
+    reason,
+    strategy,
+    timestamp: Date.now(),
+  };
 }

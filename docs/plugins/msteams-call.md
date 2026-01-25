@@ -43,7 +43,7 @@ Minimal config:
 - Voice calls via Teams (inbound and outbound)
 - Real-time speech-to-text via OpenAI Realtime API
 - Text-to-speech responses via OpenAI TTS
-- Call authorization (allowlist, tenant-only, or open)
+- Call authorization (disabled, allowlist, tenant-only, or open)
 - Integration with C# media gateway for Teams SDK compatibility
 
 ## Architecture
@@ -59,6 +59,7 @@ The plugin provides:
 - TTS via OpenAI
 - STT via OpenAI Realtime API
 - Call state management
+- **Call authorization** (single source of truth for auth policy)
 
 ## Prerequisites
 
@@ -130,9 +131,11 @@ Set config under `plugins.entries.msteams-call.config`:
           },
 
           // Call authorization (who can call the bot)
+          // Authorization is handled entirely in Clawdbot (not the C# gateway)
           authorization: {
-            mode: "tenantOnly", // open | tenantOnly | allowlist
-            allowedTenants: ["your-tenant-id"],
+            mode: "allowlist", // disabled | open | allowlist | tenant-only
+            allowFrom: ["user@example.com", "user-object-id"],
+            allowedTenants: ["your-tenant-guid"],
             allowPstn: false
           }
         }
@@ -168,10 +171,59 @@ Set config under `plugins.entries.msteams-call.config`:
 | `responseTimeoutMs` | Response timeout (ms) | 30000 |
 | `maxConcurrentCalls` | Max simultaneous calls | 5 |
 | `maxDurationSeconds` | Max call duration (s) | 3600 |
-| `authorization.mode` | Call authorization: `open`, `tenantOnly`, or `allowlist` | open |
-| `authorization.allowFrom` | AAD object IDs allowed to call (when mode=allowlist) | [] |
-| `authorization.allowedTenants` | Tenant IDs allowed (when mode=tenantOnly) | [] |
+| `authorization.mode` | Call authorization: `disabled`, `open`, `allowlist`, or `tenant-only` | disabled |
+| `authorization.allowFrom` | Email addresses or AAD object IDs allowed to call (when mode=allowlist). Empty list = reject all. | [] |
+| `authorization.allowedTenants` | Tenant GUIDs allowed (when mode=tenant-only or allowlist). Empty list = reject all. | [] |
 | `authorization.allowPstn` | Allow PSTN (phone) callers | false |
+
+## Call Authorization
+
+Authorization for inbound calls is handled **entirely in Clawdbot**. The C# Media Gateway delegates all authorization decisions to Clawdbot via WebSocket messages, making Clawdbot the single source of truth for authorization policy.
+
+### Authorization Modes
+
+| Mode | Description |
+|------|-------------|
+| `disabled` | Reject ALL inbound calls. This is the **default** (fail-closed). |
+| `open` | Allow all callers (use with caution). |
+| `allowlist` | Only allow callers in `allowFrom` list. |
+| `tenant-only` | Only allow callers from tenants in `allowedTenants` list. |
+
+### Fail-Closed Security
+
+The authorization system follows fail-closed principles:
+
+- **Default mode is `disabled`**: All calls are rejected until you explicitly configure authorization.
+- **Empty lists reject all**: If `allowFrom` or `allowedTenants` is empty when required by the mode, calls are rejected.
+- **Must configure before enabling**: You must set up authorization BEFORE enabling inbound calls in production.
+
+### Example Configuration
+
+```json
+{
+  "msteams-call": {
+    "enabled": true,
+    "bridge": {
+      "secret": "your-32-char-minimum-secret-here"
+    },
+    "authorization": {
+      "mode": "allowlist",
+      "allowFrom": ["user@example.com", "user-object-id"],
+      "allowedTenants": ["tenant-guid-here"],
+      "allowPstn": false
+    }
+  }
+}
+```
+
+### Deployment Notes
+
+> **Breaking Change**: Authorization has moved from the C# Gateway to Clawdbot. Both components must be updated together.
+
+- The C# Gateway no longer has its own `CallAuthMode`, `AllowedUsers`, or `AllowedTenants` settings.
+- All authorization configuration is now in the Clawdbot `msteams-call` plugin config.
+- The default `disabled` mode means calls will be rejected until you configure authorization.
+- When upgrading from an older version, migrate your authorization settings from the gateway's `appsettings.json` to the Clawdbot plugin config.
 
 ## Agent Tool
 

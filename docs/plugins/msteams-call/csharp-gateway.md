@@ -52,17 +52,47 @@ Include in your Teams app manifest:
 }
 ```
 
+## Authorization
+
+**Important:** Authorization policy is configured in Clawdbot, not the gateway. The gateway only handles:
+- Microsoft token validation (required by Teams)
+- Forwarding auth requests to Clawdbot
+- Enforcing Clawdbot's auth decision
+
+### Gateway Configuration
+
+| Setting | Default | Range | Description |
+|---------|---------|-------|-------------|
+| `ClawdbotAuthTimeoutMs` | 2000 | 1-14999 | Timeout in milliseconds for authorization requests to Clawdbot |
+
 ## Connection Lifecycle
 
+### Inbound Call Flow
+
 ```
-1. Call arrives at Teams -> Teams notifies your /api/calling webhook
-2. Your gateway validates the notification (JWT, 15s deadline)
-3. Answer the call with application-hosted media
-4. IMMEDIATELY connect WebSocket to Clawdbot:
+1. Teams sends incoming call notification to /api/calling webhook
+2. Gateway validates the notification (JWT, 15s deadline)
+3. Gateway extracts caller metadata (tenantId, userId, displayName, etc.)
+4. Gateway sends auth_request to Clawdbot (2s timeout by default)
+5. Clawdbot responds with auth_response
+6. If authorized -> Gateway calls AnswerAsync()
+7. If unauthorized/timeout/error -> Gateway calls RejectAsync()
+8. On answer, IMMEDIATELY connect WebSocket to Clawdbot:
    wss://<clawdbot-host>:<port>/teams-call/stream
-5. Send session_start message
-6. Begin audio frame relay (both directions)
-7. On call end, send session_end and close WebSocket
+9. Send session_start message
+10. Begin audio frame relay (both directions)
+11. On call end, send session_end and close WebSocket
+```
+
+### Outbound Call Flow
+
+```
+1. Clawdbot sends initiateCall request to gateway REST endpoint
+2. Gateway creates outbound call via Graph API
+3. Connect WebSocket to Clawdbot
+4. Send session_start message
+5. Begin audio frame relay (both directions)
+6. On call end, send session_end and close WebSocket
 ```
 
 ## WebSocket Protocol
@@ -89,6 +119,26 @@ X-Bridge-Secret: <your-shared-secret>
 ### Messages (C# -> Clawdbot)
 
 All messages are JSON. Audio data is base64-encoded.
+
+#### auth_request (send before answering inbound calls)
+
+Sent to Clawdbot to request authorization for an inbound call. Gateway waits for `auth_response` before answering or rejecting the call.
+
+```json
+{
+  "type": "auth_request",
+  "callId": "call-123",
+  "correlationId": "abc123",
+  "metadata": {
+    "tenantId": "...",
+    "userId": "...",
+    "displayName": "...",
+    "userPrincipalName": "...",
+    "teamsCallId": "...",
+    "phoneNumber": "..."
+  }
+}
+```
 
 #### session_start (send immediately after WebSocket connects)
 
@@ -146,6 +196,29 @@ Status values: `ringing`, `answered`, `failed`, `busy`, `no-answer`
 Reason values: `hangup-user`, `hangup-bot`, `error`, `timeout`
 
 ### Messages (Clawdbot -> C#)
+
+#### auth_response (response to auth_request)
+
+Sent by Clawdbot in response to an `auth_request`. The gateway uses this to decide whether to answer or reject the call.
+
+```json
+{
+  "type": "auth_response",
+  "callId": "call-123",
+  "correlationId": "abc123",
+  "authorized": true,
+  "reason": "User in allowlist",
+  "strategy": "allowlist",
+  "timestamp": 1234567890123
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `authorized` | `true` to answer the call, `false` to reject |
+| `reason` | Human-readable explanation of the decision |
+| `strategy` | Authorization strategy used (e.g., `allowlist`, `tenant`, `open`) |
+| `timestamp` | Unix timestamp in milliseconds |
 
 #### audio_out (TTS output)
 
@@ -298,7 +371,7 @@ All control plane endpoints require the shared secret in the `X-Bridge-Secret` h
 
 ```
 POST /control/initiateCall HTTP/1.1
-Host: gateway.example.com
+Host: gateway.yourdomain.com
 X-Bridge-Secret: <your-shared-secret>
 Content-Type: application/json
 ```

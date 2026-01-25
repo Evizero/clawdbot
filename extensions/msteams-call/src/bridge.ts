@@ -18,6 +18,8 @@ import type {
   EndReason,
   SessionResumeMessage,
   PingMessage,
+  AuthRequestMessage,
+  AuthResult,
 } from "./types.js";
 import {
   parseInboundMessage,
@@ -26,6 +28,7 @@ import {
   buildHangup,
   buildInitiateCall,
   buildPong,
+  buildAuthResponse,
   decodeAudioData,
   MessageParseError,
   validateTeamsAudioFrame,
@@ -36,6 +39,7 @@ import {
   resample24kTo16k,
   chunkAudio,
 } from "./audio-utils.js";
+import type { TeamsCallConfig } from "./config.js";
 
 /**
  * Logger interface for injected logging.
@@ -61,6 +65,8 @@ export interface BridgeConfig {
   secret: string;
   /** Optional logger for structured logging */
   logger?: Logger;
+  /** Full plugin config for authorization */
+  fullConfig?: TeamsCallConfig;
 }
 
 /**
@@ -119,7 +125,8 @@ export interface STTProvider {
  */
 export class TeamsAudioBridge extends EventEmitter {
   private wss: WebSocketServer | null = null;
-  private config: Required<Omit<BridgeConfig, "logger">> & { logger?: Logger };
+  private config: Required<Omit<BridgeConfig, "logger" | "fullConfig">> & { logger?: Logger };
+  private fullConfig?: TeamsCallConfig;
   private sessions: Map<string, BridgeSession> = new Map();
   private pendingCalls: Map<string, PendingCall> = new Map();
   private connections: Map<string, WebSocket> = new Map(); // Track gateway connections
@@ -145,6 +152,7 @@ export class TeamsAudioBridge extends EventEmitter {
       path: config.path ?? "/teams-call/stream",
       secret: config.secret,
     };
+    this.fullConfig = config.fullConfig;
     this.logger = config.logger;
   }
 
@@ -549,6 +557,9 @@ export class TeamsAudioBridge extends EventEmitter {
       case "ping":
         this.handlePing(ws, msg as PingMessage);
         break;
+      case "auth_request":
+        this.handleAuthRequest(ws, msg as AuthRequestMessage);
+        break;
     }
   }
 
@@ -700,6 +711,115 @@ export class TeamsAudioBridge extends EventEmitter {
     this.logger?.info(
       `[TeamsAudioBridge] Session resumed for call ${msg.callId}, lastSeq=${msg.lastReceivedSeq}`
     );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Authorization
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Pure config-driven authorization (no custom handlers - matches clawdbot philosophy)
+   */
+  private authorizeCall(metadata: SessionMetadata): AuthResult {
+    const authConfig = this.fullConfig?.authorization ?? {
+      mode: "disabled" as const,
+      allowFrom: [],
+      allowedTenants: [],
+      allowPstn: false,
+    };
+    const { mode, allowFrom, allowedTenants, allowPstn } = authConfig;
+
+    // CRITICAL: Validate metadata exists
+    if (!metadata || !metadata.tenantId || !metadata.userId) {
+      this.logger?.warn("[msteams-call] Invalid metadata - rejecting");
+      return { authorized: false, reason: "Invalid metadata", strategy: "validation-failed" };
+    }
+
+    // PSTN check (applies to all modes except disabled)
+    if (mode !== "disabled" && metadata.phoneNumber && !allowPstn) {
+      this.logger?.info(`[msteams-call] PSTN call rejected: ${metadata.phoneNumber}`);
+      return { authorized: false, reason: "PSTN calls not allowed", strategy: "pstn-blocked" };
+    }
+
+    switch (mode) {
+      case "disabled":
+        this.logger?.info("[msteams-call] Inbound call rejected: policy is disabled");
+        return { authorized: false, reason: "Inbound calls disabled", strategy: "disabled" };
+
+      case "open":
+        this.logger?.info("[msteams-call] Call accepted: policy is open");
+        return { authorized: true, strategy: "open" };
+
+      case "tenant-only":
+        // CRITICAL: Empty list = reject all (fail-closed)
+        if (allowedTenants.length === 0) {
+          this.logger?.warn("[msteams-call] No tenants configured - rejecting");
+          return { authorized: false, reason: "No tenants configured", strategy: "tenant-only" };
+        }
+        if (allowedTenants.includes(metadata.tenantId)) {
+          this.logger?.info(`[msteams-call] Tenant ${metadata.tenantId} accepted`);
+          return { authorized: true, strategy: "tenant-only" };
+        }
+        this.logger?.info(`[msteams-call] Tenant ${metadata.tenantId} rejected`);
+        return { authorized: false, reason: "Tenant not allowed", strategy: "tenant-only" };
+
+      case "allowlist":
+      default:
+        // CRITICAL: Empty list = reject all (fail-closed)
+        if (allowFrom.length === 0) {
+          this.logger?.warn("[msteams-call] No users in allowlist - rejecting");
+          return { authorized: false, reason: "No users configured", strategy: "allowlist" };
+        }
+
+        const userId = metadata.userId?.toLowerCase();
+        const upn = metadata.userPrincipalName?.toLowerCase();
+        const identifier = upn || userId || "unknown";
+
+        const allowed = allowFrom.some((entry) => {
+          const normalized = entry.toLowerCase();
+          return normalized === userId || normalized === upn;
+        });
+
+        this.logger?.info(`[msteams-call] User ${identifier} ${allowed ? "accepted" : "rejected"}`);
+        return allowed
+          ? { authorized: true, strategy: "allowlist" }
+          : { authorized: false, reason: "User not in allowlist", strategy: "allowlist" };
+    }
+  }
+
+  /**
+   * Handle auth request from gateway.
+   */
+  private handleAuthRequest(ws: WebSocket, msg: AuthRequestMessage): void {
+    const { callId, correlationId, metadata } = msg;
+
+    try {
+      const result = this.authorizeCall(metadata);
+
+      const response = buildAuthResponse(
+        callId,
+        correlationId,
+        result.authorized,
+        result.reason,
+        result.strategy
+      );
+
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(serializeOutboundMessage(response));
+      }
+
+      this.logger?.info(
+        `[msteams-call][AUDIT] Auth ${result.authorized ? "granted" : "denied"} - ` +
+        `CallId: ${callId}, Strategy: ${result.strategy}, Reason: ${result.reason || "N/A"}`
+      );
+    } catch (err) {
+      this.logger?.error("[msteams-call] Auth request error:", err);
+
+      const response = buildAuthResponse(callId, correlationId, false, "Authorization error");
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(serializeOutboundMessage(response));
+      }
+    }
   }
 }
 

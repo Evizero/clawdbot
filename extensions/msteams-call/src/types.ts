@@ -106,6 +106,16 @@ export interface PingMessage {
 }
 
 /**
+ * Authorization request from gateway for call authorization.
+ */
+export interface AuthRequestMessage {
+  type: "auth_request";
+  callId: string;
+  correlationId: string;
+  metadata: SessionMetadata;
+}
+
+/**
  * All inbound message types (C# → Clawdbot).
  */
 export type InboundMessage =
@@ -114,7 +124,8 @@ export type InboundMessage =
   | AudioInMessage
   | SessionEndMessage
   | SessionResumeMessage
-  | PingMessage;
+  | PingMessage
+  | AuthRequestMessage;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Messages from Clawdbot → C# Gateway
@@ -159,13 +170,36 @@ export interface PongMessage {
 }
 
 /**
+ * Authorization response sent to gateway.
+ */
+export interface AuthResponseMessage {
+  type: "auth_response";
+  callId: string;
+  correlationId: string;
+  authorized: boolean;
+  reason?: string;
+  strategy?: string;
+  timestamp: number;
+}
+
+/**
+ * Result of authorization check.
+ */
+export interface AuthResult {
+  authorized: boolean;
+  reason?: string;
+  strategy: string;
+}
+
+/**
  * All outbound message types (Clawdbot → C#).
  */
 export type OutboundMessage =
   | InitiateCallMessage
   | AudioOutMessage
   | HangupMessage
-  | PongMessage;
+  | PongMessage
+  | AuthResponseMessage;
 
 /**
  * All bridge message types.
