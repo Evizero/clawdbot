@@ -244,12 +244,12 @@ This is often easier than hand-editing JSON manifests.
 4. **Configure Moltbot**
    ```json
    {
-     "msteams": {
-       "enabled": true,
-       "appId": "<APP_ID>",
-       "appPassword": "<APP_PASSWORD>",
-       "tenantId": "<TENANT_ID>",
-       "webhook": { "port": 3978, "path": "/api/messages" }
+     msteams: {
+       enabled: true,
+       appId: "<APP_ID>",
+       appPassword: "<APP_PASSWORD>",
+       tenantId: "<TENANT_ID>",
+       webhook: { port: 3978, path: "/api/messages" }
      }
    }
    ```
@@ -434,6 +434,10 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides (`"*"` wildcard supported).
 - `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](#sending-files-in-group-chats)).
+- `channels.msteams.capabilities`: array of enabled features (e.g., `["text", "images", "files"]`).
+- `channels.msteams.markdown.tableMode`: table rendering mode (`text` or `adaptive`).
+- `channels.msteams.mediaMaxMb`: max media file size in MB (default: 25).
+- `channels.msteams.inboundDebounceMs`: debounce delay for rapid inbound messages (ms).
 
 ## Routing & Sessions
 - Session keys follow the standard agent format (see [/concepts/session](/concepts/session)):
@@ -457,15 +461,15 @@ Teams recently introduced two channel UI styles over the same underlying data mo
 
 **Solution:** Configure `replyStyle` per-channel based on how the channel is set up:
 
-```json
+```json5
 {
-  "msteams": {
-    "replyStyle": "thread",
-    "teams": {
+  msteams: {
+    replyStyle: "thread",
+    teams: {
       "19:abc...@thread.tacv2": {
-        "channels": {
+        channels: {
           "19:xyz...@thread.tacv2": {
-            "replyStyle": "top-level"
+            replyStyle: "top-level"
           }
         }
       }

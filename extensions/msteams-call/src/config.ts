@@ -58,6 +58,20 @@ export const BridgeConfigSchema = z.object({
 });
 
 /**
+ * Call authorization configuration.
+ */
+export const AuthorizationConfigSchema = z.object({
+  /** Authorization mode: open, allowlist, or tenant-only */
+  mode: z.enum(["open", "allowlist", "tenant-only"]).default("allowlist"),
+  /** List of allowed user IDs or UPNs (for allowlist mode) */
+  allowFrom: z.array(z.string()).default([]),
+  /** List of allowed tenant IDs (for tenant-only and allowlist modes) */
+  allowedTenants: z.array(z.string()).default([]),
+  /** Whether to allow PSTN (phone) calls */
+  allowPstn: z.boolean().default(false),
+});
+
+/**
  * Inbound call configuration.
  */
 export const InboundConfigSchema = z.object({
@@ -95,6 +109,14 @@ export const TeamsCallConfigSchema = z.object({
 
   /** Bridge authentication */
   bridge: BridgeConfigSchema,
+
+  /** Call authorization settings */
+  authorization: AuthorizationConfigSchema.optional().transform((v) => v ?? {
+    mode: "allowlist" as const,
+    allowFrom: [],
+    allowedTenants: [],
+    allowPstn: false,
+  }),
 
   /** Inbound call settings */
   inbound: InboundConfigSchema.optional().transform((v) => v ?? {

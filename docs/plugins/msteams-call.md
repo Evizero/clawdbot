@@ -7,9 +7,44 @@ read_when:
 
 # MS Teams Voice Call (plugin)
 
-Voice calls for Clawdbot via Microsoft Teams. Supports inbound and outbound calls with real-time speech-to-text and text-to-speech.
+Status: ready for inbound and outbound voice calls via Microsoft Teams.
 
 **Important:** This plugin requires a separate C# media gateway running on Azure Windows Server. The gateway handles the Teams media processing, while Clawdbot handles the AI conversation.
+
+## Quick setup
+
+1. Install the plugin: `clawdbot plugins install @clawdbot/msteams-call`
+2. Deploy the C# Media Gateway to an Azure Windows VM
+3. Configure the bridge secret (same 32+ char value in both configs)
+4. Set your OpenAI API key (for TTS/STT)
+5. Start the gateway
+
+Minimal config:
+```json5
+{
+  plugins: {
+    entries: {
+      "msteams-call": {
+        enabled: true,
+        config: {
+          bridge: {
+            // Generate with: openssl rand -base64 32
+            secret: "your-shared-secret-min-32-chars"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+## Goals
+
+- Voice calls via Teams (inbound and outbound)
+- Real-time speech-to-text via OpenAI Realtime API
+- Text-to-speech responses via OpenAI TTS
+- Call authorization (allowlist, tenant-only, or open)
+- Integration with C# media gateway for Teams SDK compatibility
 
 ## Architecture
 
@@ -92,6 +127,13 @@ Set config under `plugins.entries.msteams-call.config`:
             openaiApiKey: "sk-...", // or use OPENAI_API_KEY env
             sttModel: "gpt-4o-transcribe",
             silenceDurationMs: 800
+          },
+
+          // Call authorization (who can call the bot)
+          authorization: {
+            mode: "tenantOnly", // open | tenantOnly | allowlist
+            allowedTenants: ["your-tenant-id"],
+            allowPstn: false
           }
         }
       }
@@ -126,6 +168,10 @@ Set config under `plugins.entries.msteams-call.config`:
 | `responseTimeoutMs` | Response timeout (ms) | 30000 |
 | `maxConcurrentCalls` | Max simultaneous calls | 5 |
 | `maxDurationSeconds` | Max call duration (s) | 3600 |
+| `authorization.mode` | Call authorization: `open`, `tenantOnly`, or `allowlist` | open |
+| `authorization.allowFrom` | AAD object IDs allowed to call (when mode=allowlist) | [] |
+| `authorization.allowedTenants` | Tenant IDs allowed (when mode=tenantOnly) | [] |
+| `authorization.allowPstn` | Allow PSTN (phone) callers | false |
 
 ## Agent Tool
 

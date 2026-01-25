@@ -16,12 +16,16 @@ import type {
   SessionMetadata,
   CallTarget,
   EndReason,
+  SessionResumeMessage,
+  PingMessage,
 } from "./types.js";
 import {
   parseInboundMessage,
   serializeOutboundMessage,
   buildAudioOut,
   buildHangup,
+  buildInitiateCall,
+  buildPong,
   decodeAudioData,
   MessageParseError,
   validateTeamsAudioFrame,
@@ -118,6 +122,7 @@ export class TeamsAudioBridge extends EventEmitter {
   private config: Required<Omit<BridgeConfig, "logger">> & { logger?: Logger };
   private sessions: Map<string, BridgeSession> = new Map();
   private pendingCalls: Map<string, PendingCall> = new Map();
+  private connections: Map<string, WebSocket> = new Map(); // Track gateway connections
   private ttsProvider: TTSProvider | null = null;
   private sttProvider: STTProvider | null = null;
   private logger?: Logger;
@@ -267,6 +272,9 @@ export class TeamsAudioBridge extends EventEmitter {
     }
     this.pendingCalls.clear();
 
+    // Clear connections
+    this.connections.clear();
+
     // Clear rate limiting state
     this.connectionAttempts.clear();
 
@@ -319,6 +327,12 @@ export class TeamsAudioBridge extends EventEmitter {
   }): Promise<{ status: "answered"; callId: string }> {
     const { callId, target, message, timeoutMs = 30000 } = params;
 
+    // Find an active gateway connection to send the message
+    const gatewayWs = this.findGatewayConnection();
+    if (!gatewayWs) {
+      throw new Error("Gateway not connected - cannot initiate outbound call");
+    }
+
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         this.pendingCalls.delete(callId);
@@ -334,10 +348,23 @@ export class TeamsAudioBridge extends EventEmitter {
         timeoutId,
       });
 
-      // Note: For outbound calls, we wait for the gateway to connect back to us
-      // The actual initiate_call message is sent via REST control plane to the C# gateway
-      // which then connects to us via WebSocket when the call connects
+      // Build and send initiate_call message to gateway
+      const initiateMsg = buildInitiateCall(callId, target, message);
+      gatewayWs.send(serializeOutboundMessage(initiateMsg));
+      this.logger?.info(`[TeamsAudioBridge] Sent initiate_call for ${callId}`);
     });
+  }
+
+  /**
+   * Find an active gateway connection for outbound calls.
+   */
+  private findGatewayConnection(): WebSocket | undefined {
+    for (const [, ws] of this.connections) {
+      if (ws.readyState === WebSocket.OPEN) {
+        return ws;
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -367,25 +394,71 @@ export class TeamsAudioBridge extends EventEmitter {
       throw new Error(`No session found for call ${callId}`);
     }
 
-    // Generate TTS audio
+    // Generate TTS audio with error handling
     let pcm24k: Buffer;
-    if (this.mockTTS) {
-      pcm24k = await this.mockTTS(text);
-    } else if (this.ttsProvider) {
-      pcm24k = await this.ttsProvider.synthesize(text);
-    } else {
-      throw new Error("No TTS provider configured");
+    try {
+      if (this.mockTTS) {
+        pcm24k = await this.mockTTS(text);
+      } else if (this.ttsProvider) {
+        pcm24k = await this.ttsProvider.synthesize(text);
+      } else {
+        throw new Error("No TTS provider configured");
+      }
+    } catch (ttsErr) {
+      this.logger?.error("[TeamsAudioBridge] TTS synthesis failed:", ttsErr);
+      // Generate comfort tone (1 second of silence) instead of crashing
+      pcm24k = this.generateComfortTone(1000);
     }
 
     // Resample 24kHz → 16kHz for Teams
     const pcm16k = resample24kTo16k(pcm24k);
 
     // Send in 20ms frames (640 bytes @ 16kHz)
+    // Pad undersized frames to prevent audio glitches at end of TTS
     for (const chunk of chunkAudio(pcm16k, 640)) {
-      const msg = buildAudioOut(callId, session.lastAudioSeqSent++, chunk);
+      const frame = this.padFrameToSize(chunk, 640);
+
+      if (frame.length !== 640) {
+        this.logger?.warn(`[TeamsAudioBridge] Invalid frame size: ${frame.length}`);
+        continue;
+      }
+
+      const msg = buildAudioOut(callId, session.lastAudioSeqSent++, frame);
       session.send(msg);
       session.audioFramesSent++;
     }
+  }
+
+  /**
+   * Generate a comfort tone (silence) for fallback when TTS fails.
+   * @param durationMs Duration in milliseconds
+   * @returns 24kHz PCM buffer of silence
+   */
+  private generateComfortTone(durationMs: number): Buffer {
+    // 24kHz sample rate, 16-bit (2 bytes per sample)
+    const sampleRate = 24000;
+    const bytesPerSample = 2;
+    const samples = Math.floor((durationMs / 1000) * sampleRate);
+    const bufferSize = samples * bytesPerSample;
+
+    // Return buffer filled with zeros (silence)
+    return Buffer.alloc(bufferSize);
+  }
+
+  /**
+   * Pad audio frame to target size with silence.
+   * Used to ensure final TTS frames are full 20ms frames.
+   * @param frame Audio frame buffer
+   * @param targetSize Target frame size in bytes (default 640 for 20ms @ 16kHz)
+   * @returns Padded buffer
+   */
+  private padFrameToSize(frame: Buffer, targetSize = 640): Buffer {
+    if (frame.length >= targetSize) {
+      return frame;
+    }
+    const padded = Buffer.alloc(targetSize);
+    frame.copy(padded, 0);
+    return padded;
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -393,9 +466,15 @@ export class TeamsAudioBridge extends EventEmitter {
   // ─────────────────────────────────────────────────────────────────────────────
 
   private handleConnection(ws: WebSocket, _req: IncomingMessage): void {
+    // Generate a connection ID for tracking
+    const connectionId = `conn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this.connections.set(connectionId, ws);
+    this.logger?.info(`[TeamsAudioBridge] Gateway connected: ${connectionId}`);
+
     // Set up ping/pong for health monitoring
-    const extWs = ws as WebSocket & { isAlive?: boolean };
+    const extWs = ws as WebSocket & { isAlive?: boolean; connectionId?: string };
     extWs.isAlive = true;
+    extWs.connectionId = connectionId;
     ws.on("pong", () => {
       extWs.isAlive = true;
     });
@@ -424,6 +503,10 @@ export class TeamsAudioBridge extends EventEmitter {
     });
 
     ws.on("close", () => {
+      // Remove from connections tracking
+      this.connections.delete(connectionId);
+      this.logger?.info(`[TeamsAudioBridge] Gateway disconnected: ${connectionId}`);
+
       // Find and clean up session associated with this ws
       for (const [callId, session] of this.sessions.entries()) {
         if (session.ws === ws) {
@@ -460,6 +543,20 @@ export class TeamsAudioBridge extends EventEmitter {
       case "session_end":
         this.handleSessionEnd(msg.callId, msg.reason);
         break;
+      case "session_resume":
+        this.handleSessionResume(msg as SessionResumeMessage, ws);
+        break;
+      case "ping":
+        this.handlePing(ws, msg as PingMessage);
+        break;
+    }
+  }
+
+  private handlePing(ws: WebSocket, msg: PingMessage): void {
+    const pong = buildPong(msg.callId);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(serializeOutboundMessage(pong));
+      this.logger?.debug(`[TeamsAudioBridge] Sent pong for ${msg.callId}`);
     }
   }
 
@@ -488,6 +585,14 @@ export class TeamsAudioBridge extends EventEmitter {
         });
       } catch (err) {
         this.logger?.error("[TeamsAudioBridge] STT connect error:", err);
+
+        // CRITICAL: Close orphaned STT session to prevent leak
+        try {
+          sttSession.close();
+        } catch (closeErr) {
+          this.logger?.warn("[TeamsAudioBridge] Error closing STT session:", closeErr);
+        }
+
         this.emit("callError", { callId, error: "STT connection failed" });
         // Reject pending outbound call if applicable
         const pending = this.pendingCalls.get(callId);
@@ -581,6 +686,20 @@ export class TeamsAudioBridge extends EventEmitter {
     this.sessions.delete(callId);
 
     this.emit("callEnded", { callId, reason });
+  }
+
+  private handleSessionResume(msg: SessionResumeMessage, ws: WebSocket): void {
+    const session = this.sessions.get(msg.callId);
+    if (!session) {
+      this.logger?.warn(`[TeamsAudioBridge] session_resume for unknown call: ${msg.callId}`);
+      return;
+    }
+
+    // Update WebSocket reference for the session
+    session.ws = ws;
+    this.logger?.info(
+      `[TeamsAudioBridge] Session resumed for call ${msg.callId}, lastSeq=${msg.lastReceivedSeq}`
+    );
   }
 }
 

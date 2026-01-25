@@ -12,6 +12,9 @@ import type {
   CallStatusMessage,
   AudioInMessage,
   SessionEndMessage,
+  SessionResumeMessage,
+  PingMessage,
+  PongMessage,
   InitiateCallMessage,
   AudioOutMessage,
   HangupMessage,
@@ -79,6 +82,10 @@ export function parseInboundMessage(raw: string): InboundMessage {
       return parseAudioIn(msg, raw);
     case "session_end":
       return parseSessionEnd(msg, raw);
+    case "session_resume":
+      return parseSessionResume(msg, raw);
+    case "ping":
+      return parsePing(msg, raw);
     default:
       throw new MessageParseError(`Unknown message type: ${msg.type}`, raw);
   }
@@ -164,6 +171,28 @@ function parseSessionEnd(
     callId,
     reason,
   };
+}
+
+function parseSessionResume(
+  msg: Record<string, unknown>,
+  raw: string,
+): SessionResumeMessage {
+  const callId = requireString(msg, "callId", raw);
+  const lastReceivedSeq = requireNumber(msg, "lastReceivedSeq", raw);
+
+  return {
+    type: "session_resume",
+    callId,
+    lastReceivedSeq,
+  };
+}
+
+function parsePing(
+  msg: Record<string, unknown>,
+  raw: string,
+): PingMessage {
+  const callId = requireString(msg, "callId", raw);
+  return { type: "ping", callId };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -283,6 +312,8 @@ function requireMetadata(
       typeof m.userPrincipalName === "string"
         ? m.userPrincipalName
         : undefined,
+    phoneNumber:
+      typeof m.phoneNumber === "string" ? m.phoneNumber : undefined,
   };
 }
 
@@ -328,6 +359,16 @@ export function buildAudioOut(
 export function buildHangup(callId: string): HangupMessage {
   return {
     type: "hangup",
+    callId,
+  };
+}
+
+/**
+ * Build a pong message (response to ping).
+ */
+export function buildPong(callId: string): PongMessage {
+  return {
+    type: "pong",
     callId,
   };
 }

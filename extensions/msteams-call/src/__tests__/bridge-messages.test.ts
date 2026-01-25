@@ -6,6 +6,7 @@ import {
   buildInitiateCall,
   buildAudioOut,
   buildHangup,
+  buildPong,
   decodeAudioData,
   validateTeamsAudioFrame,
 } from "../bridge-messages.js";
@@ -14,6 +15,9 @@ import type {
   CallStatusMessage,
   AudioInMessage,
   SessionEndMessage,
+  SessionResumeMessage,
+  PingMessage,
+  PongMessage,
   AudioOutMessage,
   HangupMessage,
   InitiateCallMessage,
@@ -64,6 +68,42 @@ describe("parseInboundMessage", () => {
       expect(msg.type).toBe("session_start");
       expect(msg.direction).toBe("outbound");
       expect(msg.metadata.displayName).toBeUndefined();
+    });
+
+    it("parses session_start with phoneNumber for PSTN calls", () => {
+      const raw = JSON.stringify({
+        type: "session_start",
+        callId: "test-pstn",
+        direction: "inbound",
+        metadata: {
+          tenantId: "tenant-abc",
+          userId: "user-xyz",
+          teamsCallId: "teams-call-pstn",
+          phoneNumber: "+15551234567",
+        },
+      });
+
+      const msg = parseInboundMessage(raw) as SessionStartMessage;
+
+      expect(msg.type).toBe("session_start");
+      expect(msg.metadata.phoneNumber).toBe("+15551234567");
+    });
+
+    it("parses session_start without phoneNumber", () => {
+      const raw = JSON.stringify({
+        type: "session_start",
+        callId: "test-teams",
+        direction: "inbound",
+        metadata: {
+          tenantId: "tenant-abc",
+          userId: "user-xyz",
+          teamsCallId: "teams-call-teams",
+        },
+      });
+
+      const msg = parseInboundMessage(raw) as SessionStartMessage;
+
+      expect(msg.metadata.phoneNumber).toBeUndefined();
     });
 
     it("throws on missing metadata", () => {
@@ -277,6 +317,96 @@ describe("parseInboundMessage", () => {
     });
   });
 
+  describe("session_resume", () => {
+    it("parses valid session_resume message", () => {
+      const raw = JSON.stringify({
+        type: "session_resume",
+        callId: "test-123",
+        lastReceivedSeq: 54321,
+      });
+
+      const msg = parseInboundMessage(raw) as SessionResumeMessage;
+
+      expect(msg.type).toBe("session_resume");
+      expect(msg.callId).toBe("test-123");
+      expect(msg.lastReceivedSeq).toBe(54321);
+    });
+
+    it("parses session_resume with zero sequence", () => {
+      const raw = JSON.stringify({
+        type: "session_resume",
+        callId: "test-456",
+        lastReceivedSeq: 0,
+      });
+
+      const msg = parseInboundMessage(raw) as SessionResumeMessage;
+
+      expect(msg.type).toBe("session_resume");
+      expect(msg.lastReceivedSeq).toBe(0);
+    });
+
+    it("handles large sequence numbers", () => {
+      const raw = JSON.stringify({
+        type: "session_resume",
+        callId: "test-789",
+        lastReceivedSeq: 9007199254740991, // Max safe integer
+      });
+
+      const msg = parseInboundMessage(raw) as SessionResumeMessage;
+      expect(msg.lastReceivedSeq).toBe(9007199254740991);
+    });
+
+    it("throws on missing lastReceivedSeq", () => {
+      const raw = JSON.stringify({
+        type: "session_resume",
+        callId: "test-123",
+      });
+
+      expect(() => parseInboundMessage(raw)).toThrow(/lastReceivedSeq/i);
+    });
+
+    it("throws on invalid lastReceivedSeq type", () => {
+      const raw = JSON.stringify({
+        type: "session_resume",
+        callId: "test-123",
+        lastReceivedSeq: "not-a-number",
+      });
+
+      expect(() => parseInboundMessage(raw)).toThrow(/lastReceivedSeq/i);
+    });
+
+    it("throws on missing callId", () => {
+      const raw = JSON.stringify({
+        type: "session_resume",
+        lastReceivedSeq: 100,
+      });
+
+      expect(() => parseInboundMessage(raw)).toThrow(/callId/i);
+    });
+  });
+
+  describe("ping", () => {
+    it("parses valid ping message", () => {
+      const raw = JSON.stringify({
+        type: "ping",
+        callId: "test-123",
+      });
+
+      const msg = parseInboundMessage(raw) as PingMessage;
+
+      expect(msg.type).toBe("ping");
+      expect(msg.callId).toBe("test-123");
+    });
+
+    it("throws on missing callId", () => {
+      const raw = JSON.stringify({
+        type: "ping",
+      });
+
+      expect(() => parseInboundMessage(raw)).toThrow(/callId/i);
+    });
+  });
+
   describe("error handling", () => {
     it("throws on invalid JSON", () => {
       expect(() => parseInboundMessage("not json")).toThrow(MessageParseError);
@@ -440,6 +570,30 @@ describe("message builders", () => {
       expect(msg.type).toBe("hangup");
       expect(msg.callId).toBe("call-123");
     });
+  });
+
+  describe("buildPong", () => {
+    it("builds pong response message", () => {
+      const msg = buildPong("call-123");
+
+      expect(msg.type).toBe("pong");
+      expect(msg.callId).toBe("call-123");
+    });
+  });
+});
+
+describe("serializeOutboundMessage - pong", () => {
+  it("serializes pong message", () => {
+    const msg: PongMessage = {
+      type: "pong",
+      callId: "test-123",
+    };
+
+    const json = serializeOutboundMessage(msg);
+    const parsed = JSON.parse(json);
+
+    expect(parsed.type).toBe("pong");
+    expect(parsed.callId).toBe("test-123");
   });
 });
 

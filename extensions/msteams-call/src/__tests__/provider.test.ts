@@ -18,6 +18,12 @@ const testConfig: TeamsCallConfig = {
   bridge: {
     secret: TEST_SECRET,
   },
+  authorization: {
+    mode: "open",
+    allowFrom: [],
+    allowedTenants: [],
+    allowPstn: false,
+  },
   inbound: {
     enabled: true,
     greeting: "Hello!",
@@ -96,14 +102,16 @@ describe("TeamsCallProvider", () => {
 
   describe("initiateCall", () => {
     it("initiates a call and waits for answer", async () => {
-      // Initiate call (will wait for gateway to connect)
+      // Gateway must be connected first
+      await mockGateway.connect();
+
+      // Initiate call
       const callPromise = provider.initiateCall({
         callId: "prov-001",
         to: "user:target-user-id",
       });
 
-      // Simulate gateway connecting and answering
-      await mockGateway.connect();
+      // Simulate gateway answering
       await mockGateway.simulateCallAnswered("prov-001");
 
       const result = await callPromise;
@@ -112,13 +120,15 @@ describe("TeamsCallProvider", () => {
     });
 
     it("handles call failure", async () => {
+      // Gateway must be connected first
+      await mockGateway.connect();
+
       const callPromise = provider.initiateCall({
         callId: "prov-002",
         to: "user:target-user-id",
         timeoutMs: 5000,
       });
 
-      await mockGateway.connect();
       await mockGateway.simulateCallFailed("prov-002", "User busy");
 
       const result = await callPromise;
@@ -127,6 +137,9 @@ describe("TeamsCallProvider", () => {
     });
 
     it("handles call timeout", async () => {
+      // Gateway must be connected first
+      await mockGateway.connect();
+
       const callPromise = provider.initiateCall({
         callId: "prov-003",
         to: "user:target-user-id",

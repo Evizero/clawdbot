@@ -19,6 +19,12 @@ const testConfig: TeamsCallConfig = {
   bridge: {
     secret: TEST_SECRET,
   },
+  authorization: {
+    mode: "open",
+    allowFrom: [],
+    allowedTenants: [],
+    allowPstn: false,
+  },
   inbound: {
     enabled: true,
     greeting: "Hello! How can I help?",
@@ -159,15 +165,17 @@ describe("Integration: Full Call Flow", () => {
       provider.on("callStarted", (d) => events.push({ type: "callStarted", data: d }));
       provider.on("callEnded", (d) => events.push({ type: "callEnded", data: d }));
 
-      // 1. Initiate outbound call
+      // 1. Gateway must be connected first
+      await mockGateway.connect();
+
+      // 2. Initiate outbound call
       const callPromise = provider.initiateCall({
         callId: "int-outbound-001",
         to: "user:target-aad-id",
         message: "Hello, this is an automated call",
       });
 
-      // 2. Simulate gateway receiving the call and connecting
-      await mockGateway.connect();
+      // 3. Simulate gateway answering the call
       await mockGateway.simulateCallAnswered("int-outbound-001");
 
       // 3. Wait for call to be established
@@ -203,12 +211,14 @@ describe("Integration: Full Call Flow", () => {
     });
 
     it("handles outbound call failure gracefully", async () => {
+      // Gateway must be connected first
+      await mockGateway.connect();
+
       const callPromise = provider.initiateCall({
         callId: "int-outbound-002",
         to: "user:unavailable-user",
       });
 
-      await mockGateway.connect();
       await mockGateway.simulateCallFailed("int-outbound-002", "User unavailable");
 
       const result = await callPromise;

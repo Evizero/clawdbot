@@ -14,6 +14,7 @@ export interface SessionMetadata {
   teamsCallId: string;
   displayName?: string;
   userPrincipalName?: string;
+  phoneNumber?: string;
 }
 
 /**
@@ -88,13 +89,32 @@ export interface SessionEndMessage {
 }
 
 /**
+ * Session resume message (after reconnection).
+ */
+export interface SessionResumeMessage {
+  type: "session_resume";
+  callId: string;
+  lastReceivedSeq: number;
+}
+
+/**
+ * Ping message for connection keep-alive.
+ */
+export interface PingMessage {
+  type: "ping";
+  callId: string;
+}
+
+/**
  * All inbound message types (C# → Clawdbot).
  */
 export type InboundMessage =
   | SessionStartMessage
   | CallStatusMessage
   | AudioInMessage
-  | SessionEndMessage;
+  | SessionEndMessage
+  | SessionResumeMessage
+  | PingMessage;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Messages from Clawdbot → C# Gateway
@@ -131,12 +151,21 @@ export interface HangupMessage {
 }
 
 /**
+ * Pong response to ping.
+ */
+export interface PongMessage {
+  type: "pong";
+  callId: string;
+}
+
+/**
  * All outbound message types (Clawdbot → C#).
  */
 export type OutboundMessage =
   | InitiateCallMessage
   | AudioOutMessage
-  | HangupMessage;
+  | HangupMessage
+  | PongMessage;
 
 /**
  * All bridge message types.
