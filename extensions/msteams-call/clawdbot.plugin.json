@@ -1,0 +1,262 @@
+{
+  "id": "msteams-call",
+  "uiHints": {
+    "enabled": {
+      "label": "Enable MS Teams Voice Calls"
+    },
+    "bridge.secret": {
+      "label": "Bridge Secret",
+      "sensitive": true,
+      "help": "Shared secret for C# gateway authentication (min 32 chars)"
+    },
+    "serve.port": {
+      "label": "Bridge Port",
+      "advanced": true
+    },
+    "serve.bind": {
+      "label": "Bridge Bind Address",
+      "advanced": true
+    },
+    "serve.path": {
+      "label": "Bridge WebSocket Path",
+      "advanced": true
+    },
+    "authorization.mode": {
+      "label": "Authorization Mode"
+    },
+    "authorization.allowFrom": {
+      "label": "Allowed Users/UPNs"
+    },
+    "authorization.allowedTenants": {
+      "label": "Allowed Tenant IDs"
+    },
+    "authorization.allowPstn": {
+      "label": "Allow PSTN Calls",
+      "advanced": true
+    },
+    "inbound.enabled": {
+      "label": "Enable Inbound Calls"
+    },
+    "inbound.greeting": {
+      "label": "Inbound Greeting"
+    },
+    "outbound.enabled": {
+      "label": "Enable Outbound Calls"
+    },
+    "outbound.ringTimeoutMs": {
+      "label": "Ring Timeout (ms)",
+      "advanced": true
+    },
+    "outbound.defaultMode": {
+      "label": "Default Call Mode"
+    },
+    "tts.model": {
+      "label": "TTS Model",
+      "advanced": true
+    },
+    "tts.voice": {
+      "label": "TTS Voice",
+      "advanced": true
+    },
+    "tts.instructions": {
+      "label": "TTS Instructions",
+      "advanced": true
+    },
+    "tts.speed": {
+      "label": "TTS Speed",
+      "advanced": true
+    },
+    "streaming.openaiApiKey": {
+      "label": "OpenAI API Key",
+      "sensitive": true,
+      "advanced": true
+    },
+    "streaming.sttModel": {
+      "label": "STT Model",
+      "advanced": true
+    },
+    "streaming.silenceDurationMs": {
+      "label": "Silence Duration (ms)",
+      "advanced": true
+    },
+    "streaming.vadThreshold": {
+      "label": "VAD Threshold",
+      "advanced": true
+    },
+    "responseModel": {
+      "label": "Response Model",
+      "advanced": true
+    },
+    "responseSystemPrompt": {
+      "label": "Response System Prompt",
+      "advanced": true
+    },
+    "responseTimeoutMs": {
+      "label": "Response Timeout (ms)",
+      "advanced": true
+    },
+    "maxConcurrentCalls": {
+      "label": "Max Concurrent Calls",
+      "advanced": true
+    },
+    "maxDurationSeconds": {
+      "label": "Max Call Duration (sec)",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "serve": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "bind": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "bridge": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["secret"],
+        "properties": {
+          "secret": {
+            "type": "string",
+            "minLength": 32
+          }
+        }
+      },
+      "authorization": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["disabled", "open", "allowlist", "tenant-only"]
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowedTenants": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowPstn": {
+            "type": "boolean"
+          }
+        }
+      },
+      "inbound": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "greeting": {
+            "type": "string"
+          }
+        }
+      },
+      "outbound": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "ringTimeoutMs": {
+            "type": "integer",
+            "minimum": 5000,
+            "maximum": 120000
+          },
+          "defaultMode": {
+            "type": "string",
+            "enum": ["notify", "conversation"]
+          }
+        }
+      },
+      "tts": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "voice": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "speed": {
+            "type": "number",
+            "minimum": 0.25,
+            "maximum": 4.0
+          }
+        }
+      },
+      "streaming": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "openaiApiKey": {
+            "type": "string"
+          },
+          "sttModel": {
+            "type": "string"
+          },
+          "silenceDurationMs": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 5000
+          },
+          "vadThreshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      },
+      "responseModel": {
+        "type": "string"
+      },
+      "responseSystemPrompt": {
+        "type": "string"
+      },
+      "responseTimeoutMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 300000
+      },
+      "maxConcurrentCalls": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100
+      },
+      "maxDurationSeconds": {
+        "type": "integer",
+        "minimum": 60,
+        "maximum": 86400
+      }
+    }
+  }
+}
