@@ -13,9 +13,28 @@ export type CoreConfig = {
   session?: {
     store?: string;
   };
+  [key: string]: unknown;
+};
+
+/**
+ * Block reply chunking configuration for streaming.
+ */
+type BlockReplyChunking = {
+  minChars?: number;
+  maxChars?: number;
+  breakPreference?: "sentence" | "word" | "any";
 };
 
 type CoreAgentDeps = {
+  createClawdbotTools: (options?: Record<string, unknown>) => Array<{
+    name: string;
+    execute: (
+      toolCallId: string,
+      params: Record<string, unknown>,
+      signal?: AbortSignal,
+    ) => Promise<unknown> | unknown;
+  }>;
+  normalizeToolName: (name: string) => string;
   resolveAgentDir: (cfg: CoreConfig, agentId: string) => string;
   resolveAgentWorkspaceDir: (cfg: CoreConfig, agentId: string) => string;
   resolveAgentIdentity: (
@@ -44,6 +63,19 @@ type CoreAgentDeps = {
     lane?: string;
     extraSystemPrompt?: string;
     agentDir?: string;
+    // Streaming support
+    abortSignal?: AbortSignal;
+    onBlockReply?: (payload: {
+      text?: string;
+      mediaUrls?: string[];
+    }) => void | Promise<void>;
+    onToolResult?: (payload: {
+      text?: string;
+      mediaUrls?: string[];
+    }) => void | Promise<void>;
+    shouldEmitToolResult?: () => boolean;
+    blockReplyChunking?: BlockReplyChunking;
+    blockReplyBreak?: "text_end" | "message_end";
   }) => Promise<{
     payloads?: Array<{ text?: string; isError?: boolean }>;
     meta?: { aborted?: boolean };
@@ -145,6 +177,8 @@ export async function loadCoreAgentDeps(): Promise<CoreAgentDeps> {
 
   coreDepsPromise = (async () => {
     const [
+      tools,
+      toolPolicy,
       agentScope,
       defaults,
       identity,
@@ -155,6 +189,12 @@ export async function loadCoreAgentDeps(): Promise<CoreAgentDeps> {
       sessions,
       channelSession,
     ] = await Promise.all([
+      importCoreModule<{
+        createClawdbotTools: CoreAgentDeps["createClawdbotTools"];
+      }>("agents/clawdbot-tools.js"),
+      importCoreModule<{
+        normalizeToolName: CoreAgentDeps["normalizeToolName"];
+      }>("agents/tool-policy.js"),
       importCoreModule<{
         resolveAgentDir: CoreAgentDeps["resolveAgentDir"];
         resolveAgentWorkspaceDir: CoreAgentDeps["resolveAgentWorkspaceDir"];
@@ -190,6 +230,8 @@ export async function loadCoreAgentDeps(): Promise<CoreAgentDeps> {
     ]);
 
     return {
+      createClawdbotTools: tools.createClawdbotTools,
+      normalizeToolName: toolPolicy.normalizeToolName,
       resolveAgentDir: agentScope.resolveAgentDir,
       resolveAgentWorkspaceDir: agentScope.resolveAgentWorkspaceDir,
       resolveAgentIdentity: identity.resolveAgentIdentity,

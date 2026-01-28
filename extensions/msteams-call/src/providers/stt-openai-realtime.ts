@@ -72,10 +72,13 @@ export class OpenAIRealtimeSTTProvider implements STTProvider {
 }
 
 /**
- * Extended STT session interface with error callback.
+ * Extended STT session interface with error and barge-in callbacks.
  */
 export interface ExtendedSTTSession extends STTSession {
+  /** Register error callback */
   onError(callback: (error: Error) => void): void;
+  /** Register callback for when user starts speaking (barge-in detection) */
+  onUserSpeaking(callback: () => void): void;
 }
 
 /**
@@ -93,6 +96,7 @@ class OpenAIRealtimeSTTSession implements ExtendedSTTSession {
   private onTranscriptCallback: ((transcript: string) => void) | null = null;
   private onPartialCallback: ((partial: string) => void) | null = null;
   private onErrorCallback: ((error: Error) => void) | null = null;
+  private onUserSpeakingCallback: (() => void) | null = null;
   private logger?: Logger;
 
   constructor(
@@ -248,6 +252,8 @@ class OpenAIRealtimeSTTSession implements ExtendedSTTSession {
         break;
 
       case "input_audio_buffer.speech_started":
+        // Emit user speaking event for barge-in detection
+        this.onUserSpeakingCallback?.();
         this.pendingTranscript = "";
         break;
 
@@ -285,6 +291,10 @@ class OpenAIRealtimeSTTSession implements ExtendedSTTSession {
 
   onError(callback: (error: Error) => void): void {
     this.onErrorCallback = callback;
+  }
+
+  onUserSpeaking(callback: () => void): void {
+    this.onUserSpeakingCallback = callback;
   }
 
   close(): void {

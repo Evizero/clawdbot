@@ -83,6 +83,60 @@
       "label": "VAD Threshold",
       "advanced": true
     },
+    "streaming.sentenceMinChars": {
+      "label": "Min Chars Before Break",
+      "advanced": true
+    },
+    "streaming.sentenceMaxChars": {
+      "label": "Max Chars Per Chunk",
+      "advanced": true
+    },
+    "streaming.maxParallelTTS": {
+      "label": "Max Parallel TTS Jobs",
+      "advanced": true
+    },
+    "streaming.jitterBufferFrames": {
+      "label": "Jitter Buffer Frames",
+      "advanced": true
+    },
+    "streaming.thinkLevel": {
+      "label": "Thinking Level",
+      "advanced": true
+    },
+    "streaming.endOfTurnCue": {
+      "label": "End of Turn Audio Cue",
+      "advanced": true
+    },
+    "streaming.ttsMode": {
+      "label": "TTS Mode",
+      "advanced": true,
+      "help": "realtime: Uses Realtime API as agent (single LLM), chunked: Uses Pi agent + REST TTS"
+    },
+    "realtime.model": {
+      "label": "Realtime Model",
+      "advanced": true
+    },
+    "realtime.voice": {
+      "label": "Realtime Voice",
+      "advanced": true
+    },
+    "realtime.turnDetection.type": {
+      "label": "Turn Detection Mode",
+      "advanced": true
+    },
+    "realtime.turnDetection.threshold": {
+      "label": "VAD Threshold (Realtime)",
+      "advanced": true
+    },
+    "realtime.turnDetection.silenceDurationMs": {
+      "label": "Silence Duration (Realtime)",
+      "advanced": true
+    },
+    "realtime.maxSessionDurationMs": {
+      "label": "Max Session Duration (ms)",
+      "advanced": true,
+      "help": "OpenAI Realtime API has 15min limit. Default: 14min (840000ms)"
+    },
     "responseModel": {
       "label": "Response Model",
       "advanced": true
@@ -233,6 +287,97 @@
             "type": "number",
             "minimum": 0,
             "maximum": 1
+          },
+          "sentenceMinChars": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 200
+          },
+          "sentenceMaxChars": {
+            "type": "integer",
+            "minimum": 50,
+            "maximum": 500
+          },
+          "maxParallelTTS": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "jitterBufferFrames": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 100
+          },
+          "thinkLevel": {
+            "type": "string",
+            "enum": ["off", "low", "medium", "high"]
+          },
+          "endOfTurnCue": {
+            "type": "boolean"
+          },
+          "ttsMode": {
+            "type": "string",
+            "enum": ["auto", "realtime", "chunked"]
+          }
+        }
+      },
+      "realtime": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "OpenAI Realtime API configuration (when ttsMode is 'realtime'). Uses Realtime API as THE agent.",
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "OpenAI Realtime model (default: gpt-4o-realtime-preview)"
+          },
+          "voice": {
+            "type": "string",
+            "description": "Voice for audio output (default: coral)"
+          },
+          "turnDetection": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["server_vad", "none"]
+              },
+              "threshold": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "silenceDurationMs": {
+                "type": "integer",
+                "minimum": 100,
+                "maximum": 2000
+              },
+              "prefixPaddingMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              }
+            }
+          },
+          "tools": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "allow": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "deny": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          },
+          "maxSessionDurationMs": {
+            "type": "integer",
+            "minimum": 60000,
+            "maximum": 900000,
+            "description": "Max session duration in ms. OpenAI has 15min (900000) limit. Default: 14min (840000)."
           }
         }
       },

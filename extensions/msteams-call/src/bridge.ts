@@ -96,9 +96,10 @@ interface PendingCall {
 
 /**
  * TTS provider interface (injected).
+ * Signal parameter is REQUIRED for proper barge-in cancellation!
  */
 export interface TTSProvider {
-  synthesize(text: string): Promise<Buffer>;
+  synthesize(text: string, options?: { signal?: AbortSignal }): Promise<Buffer>;
 }
 
 /**
@@ -197,6 +198,14 @@ export class TeamsAudioBridge extends EventEmitter {
         path: this.config.path,
         verifyClient: (info, callback) => {
           const ip = info.req.socket.remoteAddress ?? "unknown";
+
+          const userAgent = info.req.headers["user-agent"];
+          const protocol = info.req.headers["sec-websocket-protocol"];
+          const hasSecret = typeof info.req.headers["x-bridge-secret"] === "string";
+          this.logger?.debug(
+            `[TeamsAudioBridge] Connection attempt from ${ip}, ` +
+            `user-agent=${userAgent ?? "unknown"}, protocol=${protocol ?? "none"}, hasBridgeSecret=${hasSecret}`
+          );
 
           // Rate limiting check
           const now = Date.now();
@@ -408,7 +417,9 @@ export class TeamsAudioBridge extends EventEmitter {
       if (this.mockTTS) {
         pcm24k = await this.mockTTS(text);
       } else if (this.ttsProvider) {
+        this.logger?.info(`[TeamsAudioBridge] TTS synthesizing: "${text.slice(0, 50)}..."`);
         pcm24k = await this.ttsProvider.synthesize(text);
+        this.logger?.info(`[TeamsAudioBridge] TTS synthesized ${pcm24k.length} bytes (24kHz)`);
       } else {
         throw new Error("No TTS provider configured");
       }
@@ -420,9 +431,11 @@ export class TeamsAudioBridge extends EventEmitter {
 
     // Resample 24kHz → 16kHz for Teams
     const pcm16k = resample24kTo16k(pcm24k);
+    this.logger?.debug(`[TeamsAudioBridge] Resampled to ${pcm16k.length} bytes (16kHz)`);
 
     // Send in 20ms frames (640 bytes @ 16kHz)
     // Pad undersized frames to prevent audio glitches at end of TTS
+    let framesSent = 0;
     for (const chunk of chunkAudio(pcm16k, 640)) {
       const frame = this.padFrameToSize(chunk, 640);
 
@@ -434,7 +447,66 @@ export class TeamsAudioBridge extends EventEmitter {
       const msg = buildAudioOut(callId, session.lastAudioSeqSent++, frame);
       session.send(msg);
       session.audioFramesSent++;
+      framesSent++;
     }
+    this.logger?.info(`[TeamsAudioBridge] Sent ${framesSent} audio frames for call ${callId}`);
+  }
+
+  /**
+   * Send a single audio frame to a call.
+   * Frame must be 640 bytes (20ms @ 16kHz PCM).
+   * Used for streaming audio delivery.
+   *
+   * @param callId - Call identifier
+   * @param frame - Audio frame buffer (640 bytes)
+   */
+  sendAudioFrame(callId: string, frame: Buffer): void {
+    const session = this.sessions.get(callId);
+    if (!session) {
+      this.logger?.warn(`[TeamsAudioBridge] No session for call ${callId}`);
+      return;
+    }
+
+    if (frame.length !== 640) {
+      this.logger?.warn(
+        `[TeamsAudioBridge] Invalid frame size: ${frame.length} (expected 640)`
+      );
+      return;
+    }
+
+    const msg = buildAudioOut(callId, session.lastAudioSeqSent++, frame);
+    session.send(msg);
+    session.audioFramesSent++;
+  }
+
+  /**
+   * Flush all pending audio for a call (barge-in).
+   * Tells C# gateway to discard queued audio immediately.
+   * Sequence continues from current value (no reset) to avoid confusing the gateway.
+   *
+   * @param callId - Call identifier
+   */
+  sendAudioFlush(callId: string): void {
+    const session = this.sessions.get(callId);
+    if (!session) {
+      this.logger?.warn(`[TeamsAudioBridge] No session for call ${callId}`);
+      return;
+    }
+
+    // Send flush message to gateway
+    const msg = {
+      type: "audio_flush",
+      callId,
+      timestamp: Date.now(),
+    };
+    if (session.ws.readyState === WebSocket.OPEN) {
+      session.ws.send(JSON.stringify(msg));
+      this.logger?.info(`[TeamsAudioBridge] Sent audio_flush for call ${callId} (seq continues from ${session.lastAudioSeqSent})`);
+    }
+
+    // NOTE: NOT resetting sequence counter - continue from where we were
+    // The gateway handles the flush by discarding queued audio but expects
+    // sequence numbers to continue incrementing
   }
 
   /**
@@ -589,11 +661,19 @@ export class TeamsAudioBridge extends EventEmitter {
         await sttSession.connect();
         // Setup handlers after successful connection
         sttSession.onTranscript((transcript) => {
-          this.emit("transcript", { callId, text: transcript, isFinal: true });
+          this.emit("transcript", { callId, text: transcript, isFinal: true, metadata });
         });
         sttSession.onPartial((partial) => {
           this.emit("transcript", { callId, text: partial, isFinal: false });
         });
+
+        // Wire barge-in detection (if extended session supports it)
+        const extendedSession = sttSession as { onUserSpeaking?: (cb: () => void) => void };
+        if (extendedSession.onUserSpeaking) {
+          extendedSession.onUserSpeaking(() => {
+            this.emit("userSpeaking", { callId });
+          });
+        }
       } catch (err) {
         this.logger?.error("[TeamsAudioBridge] STT connect error:", err);
 
@@ -675,10 +755,14 @@ export class TeamsAudioBridge extends EventEmitter {
     session.audioFramesReceived++;
     session.lastAudioSeqReceived = seq;
 
+    // Emit raw audio event for alternative handlers (e.g., RealtimeVoiceAgent)
+    // This is emitted BEFORE resampling - listeners handle their own audio processing
+    this.emit("audioIn", { callId, audio: pcm16k });
+
     // Resample 16kHz → 24kHz for OpenAI
     const pcm24k = resample16kTo24k(pcm16k);
 
-    // Send to STT
+    // Send to STT (for chunked mode)
     if (session.sttSession?.isConnected()) {
       session.sttSession.sendAudio(pcm24k);
     }

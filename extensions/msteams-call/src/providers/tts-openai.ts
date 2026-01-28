@@ -60,8 +60,16 @@ export class OpenAITTSProvider implements TTSProvider {
   /**
    * Generate speech audio from text.
    * Returns raw PCM audio data (24kHz, mono, 16-bit).
+   *
+   * @param text - Text to synthesize
+   * @param options - Optional parameters
+   * @param options.signal - AbortSignal for cancellation (barge-in support)
+   * @param options.instructions - Override default speech style instructions
    */
-  async synthesize(text: string, instructions?: string): Promise<Buffer> {
+  async synthesize(
+    text: string,
+    options?: { signal?: AbortSignal; instructions?: string }
+  ): Promise<Buffer> {
     const body: Record<string, unknown> = {
       model: this.model,
       input: text,
@@ -71,11 +79,12 @@ export class OpenAITTSProvider implements TTSProvider {
     };
 
     // Add instructions if using gpt-4o-mini-tts model
-    const effectiveInstructions = instructions || this.instructions;
+    const effectiveInstructions = options?.instructions || this.instructions;
     if (effectiveInstructions && this.model.includes("gpt-4o-mini-tts")) {
       body.instructions = effectiveInstructions;
     }
 
+    // Pass AbortSignal to fetch for true cancellation on barge-in
     const response = await fetch("https://api.openai.com/v1/audio/speech", {
       method: "POST",
       headers: {
@@ -83,6 +92,7 @@ export class OpenAITTSProvider implements TTSProvider {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
+      signal: options?.signal,
     });
 
     if (!response.ok) {
